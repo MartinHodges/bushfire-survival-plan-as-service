@@ -120,10 +120,17 @@ async def run_graph(session_id: str, initial_state: dict, config: dict):
         if not current_state.next or current_state.next == END:
             plan = current_state.values.get('final_plan')
             if session_id in websockets:
-                await websockets[session_id].send_text(json.dumps({
-                    "type": "plan_complete",
-                    "plan": plan.get('content', []) if plan else []
-                }))
+                if not plan or not plan.get('content') or len(plan.get('content', [])) == 0:
+                    logging.warning(f"[{session_id}] No plan generated.")
+                    await websockets[session_id].send_text(json.dumps({
+                        "type": "plan_complete",
+                        "plan": []
+                    }))
+                else:
+                    await websockets[session_id].send_text(json.dumps({
+                        "type": "plan_complete",
+                        "plan": plan.get('content', []) if plan else []
+                    }))
 
         # Send any pending WebSocket messages
         elif session_id in pending_messages:
