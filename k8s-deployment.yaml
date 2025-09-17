@@ -1,0 +1,40 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bushfire-plan-api
+  namespacee: bushfire-plan
+  labels:
+    app: bushfire-plan-api
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: bushfire-plan-api
+  template:
+    metadata:
+      labels:
+        app: bushfire-plan-api
+    spec:
+      containers:
+      - name: bushfire-plan-api
+        image: <Docker_username>/bfp-api:latest
+        ports:
+        - containerPort: 8000
+        env:
+        - name: OPENAI_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: openai-secret
+              key: api-key
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: bushfire-plan-service
+  namespacee: bushfire-plan
+spec:
+  selector:
+    app: bushfire-plan-api
+  ports:
+  - port: 8000
+    targetPort: 8000
