@@ -1,4 +1,5 @@
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
 from typing import Dict, Any
 import uuid
 import json
@@ -25,6 +26,14 @@ logging.getLogger("langgraph.pregel").setLevel(logging.DEBUG)
 logging.getLogger("__main__").setLevel(logging.DEBUG)
 
 app = FastAPI(title="Bushfire Plan WebSocket API")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # Global storage for sessions and websockets
 sessions: Dict[str, Dict[str, Any]] = {}
