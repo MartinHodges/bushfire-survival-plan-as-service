@@ -5,6 +5,7 @@ import uuid
 import json
 import asyncio
 import threading
+import redis.asyncio as redis
 from dotenv import load_dotenv
 from langchain.chat_models import init_chat_model
 from langchain_core.messages import HumanMessage
@@ -38,30 +39,26 @@ app.add_middleware(
 # Global storage for sessions and websockets
 sessions: Dict[str, Dict[str, Any]] = {}
 websockets: Dict[str, WebSocket] = {}
-pending_messages: Dict[str, list] = {}
-user_responses: Dict[str, Dict[str, str]] = {}
 
-# Thread locks for global dictionaries
-sessions_lock = threading.Lock()
-websockets_lock = threading.Lock()
-pending_messages_lock = threading.Lock()
-user_responses_lock = threading.Lock()
-
-sessions_lock = threading.Lock()
-websockets_lock = threading.Lock()
-pending_messages_lock = threading.Lock()
-user_responses_lock = threading.Lock()
+# Redis connection
+import os
+redis_password = os.getenv('REDIS_PASSWORD', '')
+redis_service = os.getenv('REDIS_SERVICE', '')
+redis_client = redis.Redis(host=redis_service, port=6379, password=redis_password, decode_responses=True, db=0)
 
 # Initialize LLM and graph
 llm = init_chat_model("gpt-4o")
 
-graph = create_graph(llm, pending_messages, user_responses, pending_messages_lock)
+graph = create_graph(llm, redis_client)
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
     session_id = str(uuid.uuid4())
     websockets[session_id] = websocket
+    
+    # Register websocket in Redis
+    await redis_client.set(f"ws:{session_id}", "active", ex=3600)
     
     try:
         await websocket.send_text(json.dumps({
@@ -84,6 +81,10 @@ async def websocket_endpoint(websocket: WebSocket):
             del websockets[session_id]
         if session_id in sessions:
             del sessions[session_id]
+        # Clean up Redis keys
+        await redis_client.delete(f"ws:{session_id}")
+        await redis_client.delete(f"pending:{session_id}")
+        await redis_client.delete(f"responses:{session_id}")
 
 async def start_planning_session(session_id: str, motivation: str):
     logging.info(f"[{session_id}] Starting Planning Session")
@@ -131,35 +132,36 @@ async def run_graph(session_id: str, initial_state: dict, config: dict):
             if session_id in websockets:
                 if not plan or not plan.get('content') or len(plan.get('content', [])) == 0:
                     logging.warning(f"[{session_id}] No plan generated.")
-                    await websockets[session_id].send_text(json.dumps({
+                    await send_websocket_message(session_id, {
                         "type": "plan_complete",
                         "plan": []
-                    }))
+                    })
                 else:
-                    await websockets[session_id].send_text(json.dumps({
+                    await send_websocket_message(session_id, {
                         "type": "plan_complete",
                         "plan": plan.get('content', []) if plan else []
-                    }))
+                    })
 
-        # Send any pending WebSocket messages
-        elif session_id in pending_messages:
-            logging.info(f"[{session_id}] Pending message being sent:")
-            logging.info(f"[{session_id}] {pending_messages[session_id]}")
-            with pending_messages_lock:
-                for message in pending_messages[session_id]:
-                    await websockets[session_id].send_text(json.dumps(message))
-                pending_messages[session_id] = []
+        # Send any pending WebSocket messages from Redis
         else:
-            # nothing to do, so continue with workflow
-            asyncio.create_task(run_graph(session_id, None, config))
+            pending = await redis_client.lrange(f"pending:{session_id}", 0, -1)
+            if pending:
+                logging.info(f"[{session_id}] Pending messages being sent: {len(pending)}")
+                for msg_json in pending:
+                    message = json.loads(msg_json)
+                    await send_websocket_message(session_id, message)
+                await redis_client.delete(f"pending:{session_id}")
+            else:
+                # nothing to do, so continue with workflow
+                asyncio.create_task(run_graph(session_id, None, config))
         
     except Exception as e:
         logging.error(f"[{session_id}] Error in run_graph: {e}")
         if session_id in websockets:
-            await websockets[session_id].send_text(json.dumps({
+            await send_websocket_message(session_id, {
                 "type": "error",
                 "message": str(e)
-            }))
+            })
 
 async def handle_user_response(session_id: str, message: dict):
     logging.debug(f"[{session_id}] handle_user_response: {message}")
@@ -167,12 +169,21 @@ async def handle_user_response(session_id: str, message: dict):
     if session_id not in sessions:
         return
 
-    with user_responses_lock:
-        user_responses[session_id] = message["answers"]
+    # Store user responses in Redis
+    await redis_client.hset(f"responses:{session_id}", mapping=message["answers"])
+    await redis_client.expire(f"responses:{session_id}", 3600)
 
     # Resume workflow with user_response passed to the next node
     config = sessions[session_id]["config"]
     asyncio.create_task(run_graph(session_id, None, config))
+
+async def send_websocket_message(session_id: str, message: dict):
+    """Send message to websocket, checking Redis for active connection"""
+    is_active = await redis_client.get(f"ws:{session_id}")
+    if is_active and session_id in websockets:
+        await websockets[session_id].send_text(json.dumps(message))
+    else:
+        logging.warning(f"[{session_id}] WebSocket not active, message dropped")
 
 if __name__ == "__main__":
     import uvicorn

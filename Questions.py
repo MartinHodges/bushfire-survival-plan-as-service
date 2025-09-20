@@ -1,11 +1,12 @@
 from StateTypes import GraphState
 import logging
+import json
+import asyncio
 
 class WebSocketQuestions:
-    def __init__(self, section, pending_messages, lock):
+    def __init__(self, section, redis_client):
         self.section = section
-        self.pending_messages = pending_messages
-        self.lock = lock
+        self.redis_client = redis_client
 
     def __call__(self, state: GraphState):
         session_id = state.session_id
@@ -22,23 +23,27 @@ class WebSocketQuestions:
             logging.warning(f"[{session_id}] No questions to ask in section {self.section}")
             return {}
         
-        # Store message to send later
-        with self.lock:
-            if session_id not in self.pending_messages:
-                self.pending_messages[session_id] = []
-
-            self.pending_messages[session_id].append({
-                "type": "questions",
-                "section": self.section,
-                "questions": questions
-            })
+        # Store message in Redis
+        message = {
+            "type": "questions",
+            "section": self.section,
+            "questions": questions
+        }
+        
+        # Use asyncio to run Redis operation
+        loop = asyncio.get_event_loop()
+        loop.create_task(self._store_message(session_id, message))
         
         return {}
+    
+    async def _store_message(self, session_id, message):
+        await self.redis_client.lpush(f"pending:{session_id}", json.dumps(message))
+        await self.redis_client.expire(f"pending:{session_id}", 3600)
 
 class WebSocketAnswers:
-    def __init__(self, section, user_responses):
+    def __init__(self, section, redis_client):
         self.section = section
-        self.user_responses = user_responses
+        self.redis_client = redis_client
 
     def __call__(self, state: GraphState):
         session_id = state.session_id
@@ -47,13 +52,18 @@ class WebSocketAnswers:
             logging.error(f"[{session_id}] No session_id in state")
             return {}
 
-        if session_id not in self.user_responses:
-            return {}
+        # Get user responses from Redis
+        loop = asyncio.get_event_loop()
+        user_response = loop.run_until_complete(self._get_responses(session_id))
         
-        user_response = self.user_responses[session_id]
+        if not user_response:
+            return {}
 
         # Update answers in place
         section_obj = getattr(state, self.section, None)
         if section_obj and hasattr(section_obj, 'questions'):
             section_obj.questions.answers.update(user_response)
         return {}
+    
+    async def _get_responses(self, session_id):
+        return await self.redis_client.hgetall(f"responses:{session_id}")
