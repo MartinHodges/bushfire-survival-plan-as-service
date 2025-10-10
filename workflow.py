@@ -1,6 +1,6 @@
 from langgraph.graph import StateGraph, START, END
-from langgraph.checkpoint.memory import MemorySaver
 from StateTypes import GraphState
+from RetryPostgresSaver import RetryPostgresSaver
 import nodes
 from context_utils import value_with_default, value_with_default_and_questions
 from AssessRisk import AssessRisk
@@ -44,6 +44,7 @@ def create_graph(llm, redis_client):
     graph_builder.add_edge(nodes.ASK_CONTINUE_WITH_PLAN_NODE, nodes.GET_CONTINUE_WITH_PLAN_NODE)
 
     graph_builder.add_edge(nodes.ASK_DEFENCE_QUESTIONS_NODE, nodes.GET_DEFENCE_ANSWERS_NODE)
+    graph_builder.add_edge(nodes.GET_DEFENCE_ANSWERS_NODE, nodes.ASSESS_DEFENCE_NODE)
     graph_builder.add_edge(nodes.ASK_STRATEGY_NODE, nodes.GET_STRATEGY_NODE)
 
     graph_builder.add_edge(nodes.ASK_STAY_PLAN_QUESTIONS_NODE, nodes.GET_STAY_PLAN_ANSWERS_NODE)
@@ -132,7 +133,7 @@ def create_graph(llm, redis_client):
     )
 
     return graph_builder.compile(
-        checkpointer=MemorySaver(),
+        checkpointer=RetryPostgresSaver(),
         interrupt_before=[
             nodes.GET_RISK_ANSWERS_NODE,
             nodes.GET_CONTINUE_WITH_PLAN_NODE,

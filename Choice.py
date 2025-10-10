@@ -1,21 +1,22 @@
 from StateTypes import GraphState
 import logging
 import json
-import asyncio
+import redis
+
+logger = logging.getLogger(__name__)
 
 class WebSocketChoice:
-    def __init__(self, section, message_section, prompt, choices, redis_client):
+    def __init__(self, section, message_section, prompt, choices, redis_client=None):
         self.section = section
         self.prompt = prompt
         self.choices = choices
         self.message_section = message_section
-        self.redis_client = redis_client
 
     def __call__(self, state: GraphState):
         session_id = state.session_id
-        logging.debug(f"[{session_id}]WebSocketChoice node ({self.section})")
+        logger.debug(f"[{session_id}] WebSocketChoice node ({self.section})")
         if not session_id:
-            logging.error(f"[{session_id}] No session_id in state")
+            logger.error(f"[{session_id}] No session_id in state")
             return {}
         
         msg_section_obj = getattr(state, self.message_section, None)
@@ -31,7 +32,7 @@ class WebSocketChoice:
             level_label = None
         level = risk_level + capability_level
 
-        # Store message in Redis
+        # Store message in memory
         message_data = {
             "type": "choice",
             "section": self.section,
@@ -43,9 +44,11 @@ class WebSocketChoice:
             "level": level
         }
         
-        # Use asyncio to run Redis operation
-        loop = asyncio.get_event_loop()
-        loop.create_task(self._store_message(session_id, message_data))
+        # Import main module to access pending_messages
+        import main
+        if session_id not in main.pending_messages:
+            main.pending_messages[session_id] = []
+        main.pending_messages[session_id].append(message_data)
 
         # Return update to ensure state persistence
         return {
@@ -53,44 +56,37 @@ class WebSocketChoice:
                 "choice_prompt": self.prompt
             }
         }
-    
-    async def _store_message(self, session_id, message):
-        await self.redis_client.lpush(f"pending:{session_id}", json.dumps(message))
-        await self.redis_client.expire(f"pending:{session_id}", 3600)
 
 class WebSocketSelection:
-    def __init__(self, section, redis_client):
+    def __init__(self, section, redis_client=None):
         self.section = section
-        self.redis_client = redis_client
 
     def __call__(self, state: GraphState):
         session_id = state.session_id
-        logging.debug(f"[{session_id}]WebSocketSelection node ({self.section})")
+        logger.debug(f"[{session_id}] WebSocketSelection section ({self.section})")
         if not session_id:
-            logging.error(f"[{session_id}] No session_id in state")
+            logger.error(f"[{session_id}] No session_id in state")
             return {}
 
-        # Get user responses from Redis
-        loop = asyncio.get_event_loop()
-        user_response_dict = loop.run_until_complete(self._get_responses(session_id))
+        # Get user responses from memory
+        import main
+        user_response_dict = main.user_responses.get(session_id, {})
         
         if not user_response_dict:
             return {}
-        
+        logger.info(f"[{session_id}] User choice: {user_response_dict}")
         # Extract the actual choice value
-        user_response = list(user_response_dict.values())[0] if user_response_dict else None
-        if not user_response:
+        user_choice = user_response_dict.get('choice', None)
+        if not user_choice:
             return {}
 
+        logger.info(f"[{session_id}] User choice: {user_choice}")
         # Update answers in place
         choice_obj = getattr(state, self.section, None)
         choice_prompt = choice_obj.choice_prompt
         choice_obj.choices_made.update({
-            choice_prompt: user_response
+            choice_prompt: user_choice
         })
-        choice_obj.last_choice = user_response
+        choice_obj.last_choice = user_choice
 
         return {self.section: choice_obj}
-    
-    async def _get_responses(self, session_id):
-        return await self.redis_client.hgetall(f"responses:{session_id}")

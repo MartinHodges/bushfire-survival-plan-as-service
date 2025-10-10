@@ -52,13 +52,17 @@ save lives during a bushfire emergency. Do not downplay risks or overstate
 capabilities. Be direct and honest in your evaluation, as people's safety 
 depends on your assessment.
 
-    Context: {full_context}
-    
-    {format_instructions}
+Phase: Capability Assessment
+
+Context: {full_context}
+
+{format_instructions}
     """,
     input_variables=["full_context"],
     partial_variables={"format_instructions": defence_analysis_parser.get_format_instructions()},
 )
+
+logger = logging.getLogger(__name__)
 
 class AssessDefence:
   def __init__(self, llm):
@@ -70,7 +74,7 @@ class AssessDefence:
     Assesses the ability for users to defend their property against bushfire risk using an LLM and structured parsing.
     """
 
-    logging.debug(f"[{state.session_id}] Assessing stay and defend capability")
+    logger.debug(f"[{state.session_id}] Assessing stay and defend capability")
 
     full_context = build_context(state)
     parsed_response = self.llm_chain.invoke({"full_context": full_context})

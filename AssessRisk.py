@@ -76,6 +76,8 @@ Do not ask the same question more than once.
 If you have determined a High or Low risk, conclude your response by showing
 your risk assessment.
 
+Phase: Risk Assessment
+
 Context: {full_context}
 
 {format_instructions}
@@ -83,6 +85,8 @@ Context: {full_context}
     input_variables=["full_context"],
     partial_variables={"format_instructions": risk_analysis_parser.get_format_instructions()},
 )
+
+logger = logging.getLogger(__name__)
 
 class AssessRisk:
   def __init__(self, llm):
@@ -94,7 +98,7 @@ class AssessRisk:
     Assesses bushfire risk using an LLM and structured parsing.
     """
 
-    logging.debug(f"[{state.session_id}] Assessing Bushfire Risk")
+    logger.debug(f"[{state.session_id}] Assessing Bushfire Risk")
 
     full_context = build_context(state)
     parsed_response = self.llm_chain.invoke({"full_context": full_context})

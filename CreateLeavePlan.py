@@ -76,13 +76,17 @@ Your response format must be:
 - status: "more" (if additional information needed) or "done" (if all areas are complete)
 - questions: 1-3 specific, actionable questions targeting identified information gaps (you can ask more questions if required)
 
-    Context: {full_context}
+Phase: Leave Plan Creation
+
+Context: {full_context}
     
-    {format_instructions}
+{format_instructions}
     """,
     input_variables=["full_context"],
     partial_variables={"format_instructions": risk_analysis_parser.get_format_instructions()},
 )
+
+logger = logging.getLogger(__name__)
 
 class CreateLeavePlan:
   def __init__(self, llm):
@@ -94,7 +98,7 @@ class CreateLeavePlan:
     Creates a leave plan using an LLM and structured parsing.
     """
 
-    logging.debug(f"[{state.session_id}] Creating stay and defend plan")
+    logger.debug(f"[{state.session_id}] Creating stay and defend plan")
 
     full_context = build_context(state)
     parsed_response = self.llm_chain.invoke({"full_context": full_context})

@@ -1,10 +1,10 @@
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from contextlib import asynccontextmanager
 from typing import Dict, Any
 import uuid
 import json
 import asyncio
-import threading
 import redis.asyncio as redis
 from dotenv import load_dotenv
 from langchain.chat_models import init_chat_model
@@ -13,20 +13,42 @@ from langgraph.types import Command
 from langgraph.graph import END
 from StateTypes import GraphState
 from workflow import create_graph
+from queue_manager import RedisQueueManager
 
 load_dotenv()
 
 # Enable LangGraph debugging
 import logging
 logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    level=logging.DEBUG,
+    format='%(asctime)s - %(name)-10s - %(levelname)-8s - %(message)s'
 )
+
+logger = logging.getLogger(__name__)
+
+logger.setLevel(logging.DEBUG)
 logging.getLogger("langgraph").setLevel(logging.DEBUG)
 logging.getLogger("langgraph.pregel").setLevel(logging.DEBUG)
-logging.getLogger("__main__").setLevel(logging.DEBUG)
+logging.getLogger("mock_llm").setLevel(logging.DEBUG)
+logging.getLogger("AssessDefence").setLevel(logging.DEBUG)
+logging.getLogger("AssessRisk").setLevel(logging.DEBUG)
+logging.getLogger("CreateLeavePlan").setLevel(logging.DEBUG)
+logging.getLogger("CreateStayPlan").setLevel(logging.DEBUG)
+logging.getLogger("ShowPlan").setLevel(logging.DEBUG)
+logging.getLogger("context_utils").setLevel(logging.DEBUG)
+logging.getLogger("postgres_checkpointer").setLevel(logging.DEBUG)
 
-app = FastAPI(title="Bushfire Plan WebSocket API")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup
+    await queue_manager.initialize_queues()
+    asyncio.create_task(queue_manager.consume_inbound(process_inbound_message))
+    logger.info("Queue consumer started")
+    yield
+    # Shutdown (if needed)
+    pass
+
+app = FastAPI(title="Bushfire Plan WebSocket API", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -36,58 +58,82 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Global storage for sessions and websockets
+# Global storage for sessions
 sessions: Dict[str, Dict[str, Any]] = {}
-websockets: Dict[str, WebSocket] = {}
+# In-memory storage for pending messages and user responses
+pending_messages: Dict[str, list] = {}
+user_responses: Dict[str, Dict[str, Any]] = {}
 
-# Redis connection
+# Redis connection and queue manager
 import os
 redis_password = os.getenv('REDIS_PASSWORD', '')
 redis_service = os.getenv('REDIS_SERVICE', '')
 redis_client = redis.Redis(host=redis_service, port=6379, password=redis_password, decode_responses=True, db=0)
+queue_manager = RedisQueueManager(redis_client)
 
 # Initialize LLM and graph
-llm = init_chat_model("gpt-4o")
+use_mock = os.getenv('USE_MOCK_LLM', 'false').lower() == 'true'
+
+if use_mock:
+    from mock_llm import MockBushfireLLM
+    llm = MockBushfireLLM()
+else:
+    llm = init_chat_model("gpt-4o")
 
 graph = create_graph(llm, redis_client)
 
-@app.websocket("/ws")
-async def websocket_endpoint(websocket: WebSocket):
-    await websocket.accept()
-    session_id = str(uuid.uuid4())
-    websockets[session_id] = websocket
+async def process_inbound_message(session_id: str, message: Dict[str, Any]):
+    """Process inbound message with lock-and-drop pattern"""
     
-    # Register websocket in Redis
-    await redis_client.set(f"ws:{session_id}", "active", ex=3600)
+    # Try to acquire processing lock atomically
+    if not await queue_manager.acquire_processing_lock(session_id):
+        logger.info(f"[{session_id}] Message dropped - already processing: {message['type']}")
+        return
     
     try:
-        await websocket.send_text(json.dumps({
-            "type": "session_started",
-            "session_id": session_id
-        }))
+        logger.info(f"[{session_id}] Processing message: {message['type']}")
         
-        while True:
-            data = await websocket.receive_text()
-            message = json.loads(data)
-            logging.info(f"[] Received ws message: {message} Type: {message['type']}")
+        if message["type"] == "start_new_plan":
+            await start_planning_session(session_id, message["motivation"])
+        elif message["type"] == "answers":
+            await handle_answers(session_id, message)
+        elif message["type"] == "choice":
+            await handle_choice(session_id, message)
+        elif message["type"] == "connect" or message["type"] == "reconnect":
+            tab_id = message.get("tab_id")
+            await handle_connect(session_id, tab_id)
             
-            if message["type"] == "start_session":
-                await start_planning_session(session_id, message["motivation"])
-            elif message["type"] == "user_response":
-                await handle_user_response(session_id, message)
-                
-    except WebSocketDisconnect:
-        if session_id in websockets:
-            del websockets[session_id]
-        if session_id in sessions:
-            del sessions[session_id]
-        # Clean up Redis keys
-        await redis_client.delete(f"ws:{session_id}")
-        await redis_client.delete(f"pending:{session_id}")
-        await redis_client.delete(f"responses:{session_id}")
+    finally:
+        await queue_manager.release_processing_lock(session_id)
+
+async def handle_connect(session_id: str, tab_id: str = None):
+    """Handle connect/reconnect messages - only called by instance with lock"""
+    config = {"configurable": {"thread_id": session_id}}
+    current_state = graph.get_state(config)
+    logger.debug(f"[{session_id} / {tab_id}] Fetch any existing session len = {len(current_state.values)}")
+    existing_session = False
+    if current_state.values and len(current_state.values) > 0:
+        # Session has data - send last UI state for context to specific tab
+        existing_session = await handle_reconnect(session_id, tab_id)
+    if not existing_session:
+        # New session - send no_session to specific tab
+        logger.info(f"[{session_id}] New session, sending no_session")
+        message = {"type": "no_session"}
+        if tab_id:
+            message["tab_id"] = tab_id
+        await queue_manager.publish_outbound(session_id, message)
 
 async def start_planning_session(session_id: str, motivation: str):
-    logging.info(f"[{session_id}] Starting Planning Session")
+    logger.info(f"[{session_id}] Starting Planning Session")
+    
+    # Clear last UI state for new session
+    await redis_client.delete(f"last_ui_state:{session_id}")
+    
+    # Reset mock LLM counters for new session
+    if use_mock and hasattr(llm, 'reset_counters'):
+        llm.reset_counters()
+        logger.debug(f"[{session_id}] Reset mock LLM counters")
+    
     config = {"configurable": {"thread_id": session_id}}
     
     prompt = """You are an expert emergency management consultant specializing in Australian bushfire preparedness. 
@@ -113,77 +159,118 @@ Do not ask a question more than once.
 async def run_graph(session_id: str, initial_state: dict, config: dict):
     try:
         if initial_state:
-            logging.info(f"[{session_id}] Initial call to graph")
+            logger.info(f"[{session_id}] Initial call to graph")
             graph.invoke(initial_state, config)
         else:
-            logging.info(f"[{session_id}] Resuming graph")
+            logger.info(f"[{session_id}] Resuming graph")
             graph.invoke(Command(resume={}), config)
         
         current_state = graph.get_state(config)
-        logging.info(f"[{session_id}] Graph execution complete. Next node: {current_state.next}")
-        logging.debug(f"[{session_id}] Current values keys: {list(current_state.values.keys()) if current_state.values else 'None'}")
+        logger.info(f"[{session_id}] Graph execution complete. Next node: {current_state.next}")
+        logger.debug(f"[{session_id}] Current values keys: {list(current_state.values.keys()) if current_state.values else 'None'}")
         
-        if not session_id in websockets:
-            logging.warning(f"[{session_id}] No websocket found, ending graph.")
-            return
-
         if not current_state.next or current_state.next == END:
             plan = current_state.values.get('final_plan')
-            if session_id in websockets:
-                if not plan or not plan.get('content') or len(plan.get('content', [])) == 0:
-                    logging.warning(f"[{session_id}] No plan generated.")
-                    await send_websocket_message(session_id, {
-                        "type": "plan_complete",
-                        "plan": []
-                    })
-                else:
-                    await send_websocket_message(session_id, {
-                        "type": "plan_complete",
-                        "plan": plan.get('content', []) if plan else []
-                    })
+            if not plan or not plan.get('content') or len(plan.get('content', [])) == 0:
+                logger.warning(f"[{session_id}] No plan generated.")
+                await send_message_to_frontend(session_id, {
+                    "type": "plan_complete",
+                    "plan": []
+                })
+            else:
+                await send_message_to_frontend(session_id, {
+                    "type": "plan_complete",
+                    "plan": plan.get('content', []) if plan else []
+                })
 
-        # Send any pending WebSocket messages from Redis
+        # Send any pending messages from memory
         else:
-            pending = await redis_client.lrange(f"pending:{session_id}", 0, -1)
+            pending = pending_messages.get(session_id, [])
             if pending:
-                logging.info(f"[{session_id}] Pending messages being sent: {len(pending)}")
-                for msg_json in pending:
-                    message = json.loads(msg_json)
-                    await send_websocket_message(session_id, message)
-                await redis_client.delete(f"pending:{session_id}")
+                logger.info(f"[{session_id}] Pending messages being sent: {len(pending)}")
+                for message in pending:
+                    await send_message_to_frontend(session_id, message)
+                pending_messages[session_id] = []
             else:
                 # nothing to do, so continue with workflow
                 asyncio.create_task(run_graph(session_id, None, config))
         
     except Exception as e:
-        logging.error(f"[{session_id}] Error in run_graph: {e}")
-        if session_id in websockets:
-            await send_websocket_message(session_id, {
-                "type": "error",
-                "message": str(e)
-            })
+        logger.error(f"[{session_id}] Error in run_graph: {e}")
+        await send_message_to_frontend(session_id, {
+            "type": "error",
+            "message": str(e),
+            "show_header": True
+        })
 
-async def handle_user_response(session_id: str, message: dict):
-    logging.debug(f"[{session_id}] handle_user_response: {message}")
+async def handle_answers(session_id: str, message: dict):
+    logger.debug(f"[{session_id}] handle_answers: {message}")
 
     if session_id not in sessions:
         return
 
-    # Store user responses in Redis
-    await redis_client.hset(f"responses:{session_id}", mapping=message["answers"])
-    await redis_client.expire(f"responses:{session_id}", 3600)
+    # Store user responses in memory
+    answers = message["answers"]
+    if isinstance(answers, dict):
+        if session_id not in user_responses:
+            user_responses[session_id] = {}
+        user_responses[session_id].update(answers)
+    else:
+        logger.error(f"[{session_id}] Answers should be a dict, got {type(answers)}")
 
-    # Resume workflow with user_response passed to the next node
+    # Resume workflow with cached answers
     config = sessions[session_id]["config"]
     asyncio.create_task(run_graph(session_id, None, config))
 
-async def send_websocket_message(session_id: str, message: dict):
-    """Send message to websocket, checking Redis for active connection"""
-    is_active = await redis_client.get(f"ws:{session_id}")
-    if is_active and session_id in websockets:
-        await websockets[session_id].send_text(json.dumps(message))
+async def handle_choice(session_id: str, message: dict):
+    logger.debug(f"[{session_id}] handle_choice: {message}")
+
+    if session_id not in sessions:
+        return
+
+    # Store user responses in memory
+    choice = message["choice"]
+    if isinstance(choice, str):
+        if session_id not in user_responses:
+            user_responses[session_id] = {}
+        user_responses[session_id]['choice'] = choice
     else:
-        logging.warning(f"[{session_id}] WebSocket not active, message dropped")
+        logger.error(f"[{session_id}] Choice should be a string, got {type(choice)}")
+
+    # Resume workflow with cached answers
+    config = sessions[session_id]["config"]
+    asyncio.create_task(run_graph(session_id, None, config))
+
+async def handle_reconnect(session_id: str, tab_id: str = None) -> bool:
+    """Handle reconnect by sending last UI state"""
+    logger.info(f"[{session_id}] Reconnecting to session")
+    last_state = await redis_client.get(f"last_ui_state:{session_id}")
+    if last_state:
+        message = json.loads(last_state)
+        if tab_id:
+            message["tab_id"] = tab_id
+        logger.info(f"[{session_id}] Sending cached UI state on reconnect")
+        await queue_manager.publish_outbound(session_id, message)
+        return True
+    else:
+        logger.warning(f"[{session_id}] No last UI state found for existing session")
+        return False
+
+async def send_message_to_frontend(session_id: str, message: dict):
+    """Send message to frontend via queue and record UI state"""
+    if "type" not in message:
+        logger.error(f"[{session_id}] Message missing 'type' field: {message}")
+        return
+    
+    # Record all UI messages except internal ones
+    ui_message_types = {"questions", "choice", "plan_complete", "error", "info"}
+    if message["type"] in ui_message_types:
+        logger.debug(f"[{session_id}] Recording last UI message: {message['type']}")
+        await redis_client.set(f"last_ui_state:{session_id}", json.dumps(message), ex=86400)
+        
+    await queue_manager.publish_outbound(session_id, message)
+
+
 
 if __name__ == "__main__":
     import uvicorn

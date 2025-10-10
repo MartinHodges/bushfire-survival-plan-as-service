@@ -48,10 +48,14 @@ Verify that all sections from the appropriate plan type (leave or stay) are
 included and fully developed.
 Double-check that no placeholder text remains in the final document.
 
-    Context: {full_context}
-    """,
+Phase: Creating Final Plan
+
+Context: {full_context}
+""",
     input_variables=["full_context"]
 )
+
+logger = logging.getLogger(__name__)
 
 class ShowPlan:
   def __init__(self, llm):
@@ -63,7 +67,7 @@ class ShowPlan:
     Create a bushfire plan based on the information gathered
     """
 
-    logging.debug(f"[{state.session_id}] Show plan")
+    logger.debug(f"[{state.session_id}] Show plan")
 
     full_context = build_context(state)
     response = self.llm_chain.invoke({"full_context": full_context})

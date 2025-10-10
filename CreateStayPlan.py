@@ -86,13 +86,17 @@ It is cruicial that you systematically collect complete information for each
 area before marking the assessment as "done" - incomplete information could 
 result in a plan that fails to protect lives and property during a bushfire emergency.
 
-      Context: {full_context}
-      
-      {format_instructions}
+Phase: Stay Plan Creation
+
+Context: {full_context}
+
+{format_instructions}
     """,
     input_variables=["full_context"],
     partial_variables={"format_instructions": risk_analysis_parser.get_format_instructions()},
 )
+
+logger = logging.getLogger(__name__)
 
 class CreateStayPlan:
    def __init__(self, llm):
@@ -104,7 +108,7 @@ class CreateStayPlan:
       Creates a stay and defend plan using an LLM and structured parsing.
       """
 
-      logging.debug(f"[{state.session_id}] Creating stay and defend plan")
+      logger.debug(f"[{state.session_id}] Creating stay and defend plan")
 
       full_context = build_context(state)
       parsed_response = self.llm_chain.invoke({"full_context": full_context})

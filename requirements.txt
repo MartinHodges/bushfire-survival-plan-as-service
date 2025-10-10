@@ -7,3 +7,5 @@ langchain
 langchain-openai
 pydantic
 redis
+psycopg[binary]
+langgraph-checkpoint-postgres

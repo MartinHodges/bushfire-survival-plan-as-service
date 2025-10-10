@@ -4,6 +4,8 @@ import json
 from pprint import pprint
 import logging
 
+logger = logging.getLogger(__name__)
+
 def build_context(state: GraphState):
     # Build context from all messages and answers
     context_parts = []
@@ -38,25 +40,29 @@ def build_context(state: GraphState):
 
 def value_with_default(value, values, state):
    if value is None or not value.lower() in values:
-       logging.warning(f"[{state.session_id}] Using default as {value} is not in {values}")
+       logger.warning(f"[{state.session_id}] Using default as {value} is not in {values}")
+       logger.info(f"State: {state}")
        return 'default'
    return value.lower()
 
 def value_with_default_and_questions(value, values, questions: list[str], state):
     selection = 'default'
 
+    # if state:
+    #     logger.info(f"State: {state}")
+
     if value is None or not value.lower() in values:
-       logging.warning(f"[{state.session_id}] Using default as {value} is not in {values}")
+       logger.warning(f"[{state.session_id}] Using default as {value} is not in {values} (with questions)")
        selection = 'default'
 
     elif value == 'unclear' and (not questions or len(questions.questions) == 0):
-        logging.error(f"[{state.session_id}] Using undetermined as {value} as there are no questions")
+        logger.error(f"[{state.session_id}] Using undetermined as {value} as there are no questions")
         selection = 'undetermined'
     
     else:
         selection = value.lower()
 
-    logging.debug(f"[{state.session_id}] Using {value}")
+    logger.debug(f"[{state.session_id}] Using {value}")
     return selection
 
 def print_context(state: GraphState):
