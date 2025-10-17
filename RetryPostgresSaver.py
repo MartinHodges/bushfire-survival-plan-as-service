@@ -3,13 +3,13 @@ import time
 import logging
 import psycopg
 from langgraph.checkpoint.postgres import PostgresSaver
-from langgraph.checkpoint.memory import MemorySaver
+
 
 logger = logging.getLogger(__name__)
 
 class RetryPostgresSaver:
     def __init__(self, max_retries=3, retry_delay=5):
-      """Create PostgreSQL checkpointer for LangGraph state persistence, fallback to MemorySaver"""
+      """Create PostgreSQL checkpointer for LangGraph state persistence with retry logic"""
       
       # Database connection string
       db_host = os.getenv('POSTGRES_HOST', 'kates-storage.home.b30')
@@ -55,8 +55,8 @@ class RetryPostgresSaver:
                 if attempt < self.max_retries - 1:
                     time.sleep(self.retry_delay)
                 else:
-                    logger.error("All connection attempts failed, falling back to MemorySaver") 
-                    self._saver = MemorySaver()
+                    logger.error("All PostgreSQL connection attempts failed - service degraded")
+                    raise ConnectionError("PostgreSQL unavailable - cannot persist session state")
     
     def __getattr__(self, name):
         try:
