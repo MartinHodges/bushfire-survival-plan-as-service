@@ -50,8 +50,11 @@ class Answers:
             logger.error(f"[{session_id}] No session_id in state")
             return {}
 
-        # Get user responses from Redis
+        # Get user responses from Redis and clear cache
         user_response = self.sync_redis.hgetall(f"responses:{session_id}") if self.sync_redis else {}
+        if self.sync_redis and user_response:
+            self.sync_redis.delete(f"responses:{session_id}")
+            logger.debug(f"[{session_id}] Cleared user responses cache after reading")
         
         if not user_response:
             return {}
