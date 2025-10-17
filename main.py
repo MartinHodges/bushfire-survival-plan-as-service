@@ -48,7 +48,7 @@ async def lifespan(app: FastAPI):
     # Shutdown (if needed)
     pass
 
-app = FastAPI(title="Bushfire Plan WebSocket API", lifespan=lifespan)
+app = FastAPI(title="Bushfire Plan Agentic API", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -69,6 +69,9 @@ import os
 redis_password = os.getenv('REDIS_PASSWORD', '')
 redis_service = os.getenv('REDIS_SERVICE', '')
 redis_client = redis.Redis(host=redis_service, port=6379, password=redis_password, decode_responses=True, db=0)
+# Create sync Redis client for workflow nodes
+import redis as sync_redis
+sync_redis_client = sync_redis.Redis(host=redis_service, port=6379, password=redis_password, decode_responses=True, db=0)
 queue_manager = RedisQueueManager(redis_client)
 
 # Initialize LLM and graph
@@ -80,7 +83,7 @@ if use_mock:
 else:
     llm = init_chat_model("gpt-4o")
 
-graph = create_graph(llm, redis_client)
+graph = create_graph(llm, sync_redis_client)
 
 async def process_inbound_message(session_id: str, message: Dict[str, Any]):
     """Process inbound message with lock-and-drop pattern"""
@@ -144,7 +147,7 @@ Do not ask a question more than once.
 
 """
 
-    # Add session_id to state for WebSocket nodes to use
+    # Add session_id to state for nodes to use
     initial_state: GraphState = {
         "messages": [HumanMessage(content=prompt)],
         "user_motivation": motivation,
@@ -154,6 +157,7 @@ Do not ask a question more than once.
     sessions[session_id] = {"config": config}
     
     # Start the graph execution in background
+    logger.debug(f"[{session_id}] Initial call to graph")
     asyncio.create_task(run_graph(session_id, initial_state, config))
 
 async def run_graph(session_id: str, initial_state: dict, config: dict):
@@ -167,6 +171,7 @@ async def run_graph(session_id: str, initial_state: dict, config: dict):
         
         current_state = graph.get_state(config)
         logger.info(f"[{session_id}] Graph execution complete. Next node: {current_state.next}")
+        logger.info(f"[{session_id}] Current state: {current_state}")
         logger.debug(f"[{session_id}] Current values keys: {list(current_state.values.keys()) if current_state.values else 'None'}")
         
         if not current_state.next or current_state.next == END:
@@ -185,14 +190,35 @@ async def run_graph(session_id: str, initial_state: dict, config: dict):
 
         # Send any pending messages from memory
         else:
-            pending = pending_messages.get(session_id, [])
+            logger.info(f"[{session_id}] Graph paused at node: {current_state.next}")
+            pending = await redis_client.lrange(f"pending:{session_id}", 0, -1)
+            logger.info(f"[{session_id}] Pending messages for session: {len(pending)}")
             if pending:
                 logger.info(f"[{session_id}] Pending messages being sent: {len(pending)}")
-                for message in pending:
+                for msg_json in pending:
+                    message = json.loads(msg_json)
                     await send_message_to_frontend(session_id, message)
-                pending_messages[session_id] = []
+                await redis_client.delete(f"pending:{session_id}")
             else:
-                # nothing to do, so continue with workflow
+                # Check for corrupted choice state - has choice_prompt but no actual choice
+                state_fixed = False
+                for key, value in current_state.values.items():
+                    if isinstance(value, dict) and 'choice_prompt' in value:
+                        choices_made = value.get('choices_made', {})
+                        choice_prompt = value.get('choice_prompt')
+                        if choice_prompt and choice_prompt not in choices_made:
+                            logger.warning(f"[{session_id}] Corrupted choice state detected in {key}, removing entire section")
+                            # Remove the entire choice section by updating state without it
+                            current_values = dict(current_state.values)
+                            del current_values[key]
+                            # Create new state without the corrupted section
+                            graph.update_state(config, current_values, as_node="__start__")
+                            state_fixed = True
+                
+                if state_fixed:
+                    logger.info(f"[{session_id}] State fixed, resuming graph")
+                else:
+                    logger.info(f"[{session_id}] No pending messages, resuming graph from {current_state.next}")
                 asyncio.create_task(run_graph(session_id, None, config))
         
     except Exception as e:
@@ -209,17 +235,17 @@ async def handle_answers(session_id: str, message: dict):
     if session_id not in sessions:
         return
 
-    # Store user responses in memory
+    # Store user responses in Redis
     answers = message["answers"]
     if isinstance(answers, dict):
-        if session_id not in user_responses:
-            user_responses[session_id] = {}
-        user_responses[session_id].update(answers)
+        await redis_client.hset(f"responses:{session_id}", mapping=answers)
+        await redis_client.expire(f"responses:{session_id}", 3600)
     else:
         logger.error(f"[{session_id}] Answers should be a dict, got {type(answers)}")
 
     # Resume workflow with cached answers
     config = sessions[session_id]["config"]
+    logger.debug(f"[{session_id}] Completed handling answers")
     asyncio.create_task(run_graph(session_id, None, config))
 
 async def handle_choice(session_id: str, message: dict):
@@ -228,17 +254,17 @@ async def handle_choice(session_id: str, message: dict):
     if session_id not in sessions:
         return
 
-    # Store user responses in memory
+    # Store user responses in Redis
     choice = message["choice"]
     if isinstance(choice, str):
-        if session_id not in user_responses:
-            user_responses[session_id] = {}
-        user_responses[session_id]['choice'] = choice
+        await redis_client.hset(f"responses:{session_id}", mapping={'choice': choice})
+        await redis_client.expire(f"responses:{session_id}", 3600)
     else:
         logger.error(f"[{session_id}] Choice should be a string, got {type(choice)}")
 
     # Resume workflow with cached answers
     config = sessions[session_id]["config"]
+    logger.debug(f"[{session_id}] Completed handling selection")
     asyncio.create_task(run_graph(session_id, None, config))
 
 async def handle_reconnect(session_id: str, tab_id: str = None) -> bool:

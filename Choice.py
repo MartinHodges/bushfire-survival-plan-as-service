@@ -1,20 +1,21 @@
 from StateTypes import GraphState
 import logging
-import json
 import redis
+import json
 
 logger = logging.getLogger(__name__)
 
-class WebSocketChoice:
-    def __init__(self, section, message_section, prompt, choices, redis_client=None):
+class Choice:
+    def __init__(self, section, message_section, prompt, choices, sync_redis_client=None):
         self.section = section
         self.prompt = prompt
         self.choices = choices
         self.message_section = message_section
+        self.sync_redis = sync_redis_client
 
     def __call__(self, state: GraphState):
         session_id = state.session_id
-        logger.debug(f"[{session_id}] WebSocketChoice node ({self.section})")
+        logger.debug(f"[{session_id}] Choice node ({self.section})")
         if not session_id:
             logger.error(f"[{session_id}] No session_id in state")
             return {}
@@ -44,11 +45,10 @@ class WebSocketChoice:
             "level": level
         }
         
-        # Import main module to access pending_messages
-        import main
-        if session_id not in main.pending_messages:
-            main.pending_messages[session_id] = []
-        main.pending_messages[session_id].append(message_data)
+        # Store message in Redis for cross-context access
+        self.sync_redis.lpush(f"pending:{session_id}", json.dumps(message_data))
+        self.sync_redis.expire(f"pending:{session_id}", 3600)
+        logger.info(f"[{session_id}] Choice node added pending message to Redis")
 
         # Return update to ensure state persistence
         return {
@@ -57,30 +57,32 @@ class WebSocketChoice:
             }
         }
 
-class WebSocketSelection:
-    def __init__(self, section, redis_client=None):
+class Selection:
+    def __init__(self, section, sync_redis_client=None):
         self.section = section
+        self.sync_redis = sync_redis_client
 
     def __call__(self, state: GraphState):
         session_id = state.session_id
-        logger.debug(f"[{session_id}] WebSocketSelection section ({self.section})")
+        logger.debug(f"[{session_id}] Selection section ({self.section})")
         if not session_id:
-            logger.error(f"[{session_id}] No session_id in state")
+            logger.error(f"[{session_id}] No session_id in state - cannot read selection")
             return {}
 
-        # Get user responses from memory
-        import main
-        user_response_dict = main.user_responses.get(session_id, {})
+        # Get user responses from Redis
+        user_response_dict = self.sync_redis.hgetall(f"responses:{session_id}") if self.sync_redis else {}
         
         if not user_response_dict:
+            logger.info(f"[{session_id}] No user selection provided")
+            exit(1)
             return {}
-        logger.info(f"[{session_id}] User choice: {user_response_dict}")
+        logger.info(f"[{session_id}] User selection: {user_response_dict}")
         # Extract the actual choice value
         user_choice = user_response_dict.get('choice', None)
         if not user_choice:
             return {}
 
-        logger.info(f"[{session_id}] User choice: {user_choice}")
+        logger.info(f"[{session_id}] User selection: {user_choice}")
         # Update answers in place
         choice_obj = getattr(state, self.section, None)
         choice_prompt = choice_obj.choice_prompt

@@ -8,32 +8,32 @@ from AssessDefence import AssessDefence
 from CreateLeavePlan import CreateLeavePlan
 from CreateStayPlan import CreateStayPlan
 from ShowPlan import ShowPlan
-from Questions import WebSocketQuestions, WebSocketAnswers
-from Choice import WebSocketChoice, WebSocketSelection
+from Questions import Questions, Answers
+from Choice import Choice, Selection
 
-def create_graph(llm, redis_client):
+def create_graph(llm, sync_redis_client):
     graph_builder = StateGraph(GraphState)
     graph_builder.add_node(nodes.ASSESS_RISK_NODE, AssessRisk(llm))
-    graph_builder.add_node(nodes.ASK_RISK_QUESTIONS_NODE, WebSocketQuestions("risk_assessment", redis_client))
-    graph_builder.add_node(nodes.GET_RISK_ANSWERS_NODE, WebSocketAnswers("risk_assessment", redis_client))
+    graph_builder.add_node(nodes.ASK_RISK_QUESTIONS_NODE, Questions("risk_assessment", sync_redis_client))
+    graph_builder.add_node(nodes.GET_RISK_ANSWERS_NODE, Answers("risk_assessment", sync_redis_client))
 
-    graph_builder.add_node(nodes.ASK_CONTINUE_WITH_PLAN_NODE, WebSocketChoice("continue_with_plan", "risk_assessment", "Continue with plan?", ["yes","no"], redis_client))
-    graph_builder.add_node(nodes.GET_CONTINUE_WITH_PLAN_NODE, WebSocketSelection("continue_with_plan", redis_client))
+    graph_builder.add_node(nodes.ASK_CONTINUE_WITH_PLAN_NODE, Choice("continue_with_plan", "risk_assessment", "Continue with plan?", ["yes","no"], sync_redis_client))
+    graph_builder.add_node(nodes.GET_CONTINUE_WITH_PLAN_NODE, Selection("continue_with_plan", sync_redis_client))
     
     graph_builder.add_node(nodes.ASSESS_DEFENCE_NODE, AssessDefence(llm))
-    graph_builder.add_node(nodes.ASK_DEFENCE_QUESTIONS_NODE, WebSocketQuestions("defence_assessment", redis_client))
-    graph_builder.add_node(nodes.GET_DEFENCE_ANSWERS_NODE, WebSocketAnswers("defence_assessment", redis_client))
+    graph_builder.add_node(nodes.ASK_DEFENCE_QUESTIONS_NODE, Questions("defence_assessment", sync_redis_client))
+    graph_builder.add_node(nodes.GET_DEFENCE_ANSWERS_NODE, Answers("defence_assessment", sync_redis_client))
 
-    graph_builder.add_node(nodes.ASK_STRATEGY_NODE, WebSocketChoice("stay_or_leave_plan", "defence_assessment", "Do you want to create a leave early or stay and defend plan?", ["leave", "stay"], redis_client))
-    graph_builder.add_node(nodes.GET_STRATEGY_NODE, WebSocketSelection("stay_or_leave_plan", redis_client))
+    graph_builder.add_node(nodes.ASK_STRATEGY_NODE, Choice("stay_or_leave_plan", "defence_assessment", "Do you want to create a leave early or stay and defend plan?", ["leave", "stay"], sync_redis_client))
+    graph_builder.add_node(nodes.GET_STRATEGY_NODE, Selection("stay_or_leave_plan", sync_redis_client))
     
     graph_builder.add_node(nodes.CREATE_LEAVE_PLAN_NODE, CreateLeavePlan(llm))
-    graph_builder.add_node(nodes.ASK_LEAVE_PLAN_QUESTIONS_NODE, WebSocketQuestions("leave_plan", redis_client))
-    graph_builder.add_node(nodes.GET_LEAVE_PLAN_ANSWERS_NODE, WebSocketAnswers("leave_plan", redis_client))
+    graph_builder.add_node(nodes.ASK_LEAVE_PLAN_QUESTIONS_NODE, Questions("leave_plan", sync_redis_client))
+    graph_builder.add_node(nodes.GET_LEAVE_PLAN_ANSWERS_NODE, Answers("leave_plan", sync_redis_client))
     
     graph_builder.add_node(nodes.CREATE_STAY_PLAN_NODE, CreateStayPlan(llm))
-    graph_builder.add_node(nodes.ASK_STAY_PLAN_QUESTIONS_NODE, WebSocketQuestions("stay_plan", redis_client))
-    graph_builder.add_node(nodes.GET_STAY_PLAN_ANSWERS_NODE, WebSocketAnswers("stay_plan", redis_client))
+    graph_builder.add_node(nodes.ASK_STAY_PLAN_QUESTIONS_NODE, Questions("stay_plan", sync_redis_client))
+    graph_builder.add_node(nodes.GET_STAY_PLAN_ANSWERS_NODE, Answers("stay_plan", sync_redis_client))
     
     graph_builder.add_node(nodes.SHOW_PLAN_NODE, ShowPlan(llm))
 

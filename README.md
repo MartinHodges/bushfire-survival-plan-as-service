@@ -38,7 +38,7 @@ To run the application:
 python3 main.py
 ```
 
-This will start a web-server that provides a WebSocket API for a UI (such as a React UI) to consume. An example UI can be found in my [related GitHub project]( https://github.com/MartinHodges/bushfire-survival-plan-ui)
+This will start a web-server that provides an Queue-based API for a UI (such as a React UI) to consume. An example UI can be found in my [related GitHub project]( https://github.com/MartinHodges/bushfire-survival-plan-ui)
 
 ## Features
 
