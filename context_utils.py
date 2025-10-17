@@ -36,6 +36,8 @@ def build_context(state: GraphState):
 
     full_context = "\n\n".join(context_parts)
 
+    logger.debug(f"Full context built:\n{full_context}")
+
     return full_context
 
 def value_with_default(value, values, state):

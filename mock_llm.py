@@ -60,7 +60,7 @@ class MockBushfireLLM(BaseLanguageModel):
         # Detect expected response type from JSON schema in prompt
         if "Phase: Risk Assessment" in last_message:
             self.risk_calls += 1
-            logging.debug(f"MockBushfireLLM {self.call_count}: Risk Assessment call #{self.risk_calls}")
+            logger.debug(f"MockBushfireLLM {self.call_count}: Risk Assessment call #{self.risk_calls}")
             
             if self.risk_calls == 1:
                 # First call - ask questions
@@ -87,7 +87,7 @@ class MockBushfireLLM(BaseLanguageModel):
         
         if "Phase: Capability Assessment" in last_message:
             self.defence_calls += 1
-            logging.debug(f"MockBushfireLLM {self.call_count}: Capability Assessment call #{self.defence_calls}")
+            logger.debug(f"MockBushfireLLM {self.call_count}: Capability Assessment call #{self.defence_calls}")
             
             if self.defence_calls == 1:
                 # First call - ask questions
@@ -114,7 +114,7 @@ class MockBushfireLLM(BaseLanguageModel):
         
         if "Phase: Leave Plan Creation" in last_message:
             self.plan_creation_calls += 1
-            logging.debug(f"MockBushfireLLM {self.call_count}: Detected Leave Plan Creation phase")
+            logger.debug(f"MockBushfireLLM {self.call_count}: Detected Leave Plan Creation phase")
             if self.plan_creation_calls == 1:
                 # First call - ask questions
                 return AIMessage(content=json.dumps({
@@ -147,7 +147,7 @@ class MockBushfireLLM(BaseLanguageModel):
                 }))
         if "Phase: Stay Plan Creation" in last_message:
             self.plan_creation_calls += 1
-            logging.debug(f"MockBushfireLLM {self.call_count}: Detected Stay Plan Creation phase")
+            logger.debug(f"MockBushfireLLM {self.call_count}: Detected Stay Plan Creation phase")
             if self.plan_creation_calls == 1:
                 # First call - ask questions
                 return AIMessage(content=json.dumps({
@@ -181,7 +181,7 @@ class MockBushfireLLM(BaseLanguageModel):
                     "backup_plan": "If fire too intense, retreat to bunker or evacuate immediately"
                 }))
         if "Phase: Creating Final Plan" in last_message:
-            logging.debug(f"MockBushfireLLM {self.call_count}: Detected Creating Final Plan phase")
+            logger.debug(f"MockBushfireLLM {self.call_count}: Detected Creating Final Plan phase")
 
             return AIMessage(content=
 """
