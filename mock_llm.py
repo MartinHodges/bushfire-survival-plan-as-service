@@ -1,19 +1,15 @@
 # mock_llm.py
-from langchain_core.language_models.base import BaseLanguageModel
-from langchain_core.messages import AIMessage
+from langchain_core.language_models.chat_models import BaseChatModel
+from langchain_core.messages import AIMessage, BaseMessage
 import json
 import logging
-from typing import Any
+from typing import Any, List
+from langchain_core.outputs import ChatResult, ChatGeneration
 
 # Create logger for this module
 logger = logging.getLogger(__name__)
 
-class MockBushfireLLM(BaseLanguageModel):
-    call_count: int = 0
-    risk_calls: int = 0
-    defence_calls: int = 0
-    plan_creation_calls: int = 0
-    
+class MockBushfireLLM(BaseChatModel):
     def __init__(self, **kwargs: Any):
         super().__init__(**kwargs)
         self.call_count = 0
@@ -199,39 +195,9 @@ class MockBushfireLLM(BaseLanguageModel):
         # Default response
         return AIMessage(content="Mock LLM response")
     
-    def _generate(self, messages, **kwargs):
+    def _generate(self, messages: List[BaseMessage], **kwargs):
         result = self.invoke(messages, **kwargs)
-        from langchain_core.outputs import LLMResult, Generation
-        return LLMResult(generations=[[Generation(text=result.content)]])
-        
-    async def _agenerate(self, messages, **kwargs):
-        return self._generate(messages, **kwargs)
-        
-    def generate_prompt(self, prompts, **kwargs):
-        from langchain_core.outputs import LLMResult, Generation
-        generations = []
-        for prompt in prompts:
-            result = self.invoke([prompt], **kwargs)
-            generations.append([Generation(text=result.content)])
-        return LLMResult(generations=generations)
-        
-    async def agenerate_prompt(self, prompts, **kwargs):
-        return self.generate_prompt(prompts, **kwargs)
-        
-    def predict(self, text, **kwargs):
-        from langchain_core.messages import HumanMessage
-        result = self.invoke([HumanMessage(content=text)], **kwargs)
-        return result.content
-        
-    async def apredict(self, text, **kwargs):
-        return self.predict(text, **kwargs)
-        
-    def predict_messages(self, messages, **kwargs):
-        result = self.invoke(messages, **kwargs)
-        return result
-        
-    async def apredict_messages(self, messages, **kwargs):
-        return self.predict_messages(messages, **kwargs)
+        return ChatResult(generations=[ChatGeneration(message=result)])
         
     @property
     def _llm_type(self):
