@@ -10,12 +10,13 @@ from langchain_core.outputs import ChatResult, ChatGeneration
 logger = logging.getLogger(__name__)
 
 class MockBushfireLLM(BaseChatModel):
+    call_count: int = 0
+    risk_calls: int = 0
+    defence_calls: int = 0
+    plan_creation_calls: int = 0
+    
     def __init__(self, **kwargs: Any):
         super().__init__(**kwargs)
-        self.call_count = 0
-        self.risk_calls = 0
-        self.defence_calls = 0
-        self.plan_creation_calls = 0
         
     def reset_counters(self):
         """Reset all call counters for a new session"""
