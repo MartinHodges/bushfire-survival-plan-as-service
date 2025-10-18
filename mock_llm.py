@@ -18,7 +18,7 @@ class MockBushfireLLM(BaseChatModel):
     def __init__(self, **kwargs: Any):
         super().__init__(**kwargs)
         
-    def reset_counters(self):
+    def reset_mock(self):
         """Reset all call counters for a new session"""
         self.call_count = 0
         self.risk_calls = 0
