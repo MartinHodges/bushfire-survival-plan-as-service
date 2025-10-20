@@ -36,12 +36,12 @@ logging.getLogger("ShowPlan").setLevel(logging.DEBUG)
 logging.getLogger("context_utils").setLevel(logging.DEBUG)
 logging.getLogger("postgres_checkpointer").setLevel(logging.DEBUG)
 
-
-
 # Redis connection and queue manager
 redis_password = os.getenv('REDIS_PASSWORD', '')
 redis_service = os.getenv('REDIS_SERVICE', '')
 redis_client = redis.Redis(host=redis_service, port=6379, password=redis_password, decode_responses=True, db=0)
+
+logger.info(f"Connecting to Redis at {redis_service}:6379, DB: 0, User: default")
 
 # Create sync Redis client for workflow nodes
 sync_redis_client = sync_redis.Redis(host=redis_service, port=6379, password=redis_password, decode_responses=True, db=0)

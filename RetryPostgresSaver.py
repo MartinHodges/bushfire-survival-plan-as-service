@@ -18,6 +18,8 @@ class RetryPostgresSaver:
       db_user = os.getenv('POSTGRES_USER', 'bushfire_user')
       db_password = os.getenv('POSTGRES_PASSWORD', '')
       
+      logger.info(f"Connecting to PostgreSQL at {db_host}:{db_port}, DB: {db_name}, User: {db_user}")
+
       self.connection_string = f"postgresql://{db_user}:{db_password}@{db_host}:{db_port}/{db_name}?options=-csearch_path%3Dbushfire_plans"
       self.max_retries = max_retries
       self.retry_delay = retry_delay
