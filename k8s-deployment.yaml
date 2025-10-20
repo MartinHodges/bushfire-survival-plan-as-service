@@ -2,11 +2,11 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: bushfire-plan-api
-  namespacee: bushfire-plan
+  namespace: bushfire-plan
   labels:
     app: bushfire-plan-api
 spec:
-  replicas: 1
+  replicas: 2
   selector:
     matchLabels:
       app: bushfire-plan-api
@@ -18,23 +18,31 @@ spec:
       containers:
       - name: bushfire-plan-api
         image: <Docker_username>/bfp-api:latest
-        ports:
-        - containerPort: 8000
         env:
         - name: OPENAI_API_KEY
           valueFrom:
             secretKeyRef:
               name: openai-secret
               key: api-key
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: bushfire-plan-service
-  namespacee: bushfire-plan
-spec:
-  selector:
-    app: bushfire-plan-api
-  ports:
-  - port: 8000
-    targetPort: 8000
+        - name: USE_MOCK_LLM
+          value: "false"
+        - name: REDIS_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: redis-secret
+              key: redis-key
+        - name: REDIS_SERVICE
+          value: "<<Redis service domain>>"
+        - name: POSTGRES_HOST
+          value: "<<Postgres service domain>>"
+        - name: POSTGRES_PORT
+          value: "5432"
+        - name: POSTGRES_DB
+          value: "bushfire_plan"
+        - name: POSTGRES_USER
+          value: "bfp_agent"
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: postgres-secret
+              key: postgres-key
