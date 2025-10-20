@@ -103,7 +103,7 @@ async def start_planning_session(session_id: str, motivation: str):
     logger.info(f"[{session_id}] Starting Planning Session")
     
     # Clear last UI state for new session
-    await redis_client.delete(f"last_ui_state:{session_id}")
+    await async_redis_client.delete(f"last_ui_state:{session_id}")
     
     # Reset mock LLM counters for new session
     if use_mock and hasattr(llm, 'reset_mock'):
@@ -164,14 +164,14 @@ async def run_graph(session_id: str, initial_state: dict):
         # Send any pending messages from memory
         else:
             logger.info(f"[{session_id}] Graph paused at node: {current_state.next}")
-            pending = await redis_client.lrange(f"pending:{session_id}", 0, -1)
+            pending = await async_redis_client.lrange(f"pending:{session_id}", 0, -1)
             logger.info(f"[{session_id}] Pending messages for session: {len(pending)}")
             if pending:
                 logger.info(f"[{session_id}] Pending messages being sent: {len(pending)}")
                 for msg_json in pending:
                     message = json.loads(msg_json)
                     await send_message_to_frontend(session_id, message)
-                await redis_client.delete(f"pending:{session_id}")
+                await async_redis_client.delete(f"pending:{session_id}")
             else:
                 logger.info(f"[{session_id}] No pending messages, resuming graph from {current_state.next}")
                 asyncio.create_task(run_graph(session_id, None))
@@ -190,8 +190,8 @@ async def handle_answers(session_id: str, message: dict):
     # Store user responses in Redis
     answers = message["answers"]
     if isinstance(answers, dict):
-        await redis_client.hset(f"responses:{session_id}", mapping=answers)
-        await redis_client.expire(f"responses:{session_id}", 3600)
+        await async_redis_client.hset(f"responses:{session_id}", mapping=answers)
+        await async_redis_client.expire(f"responses:{session_id}", 3600)
     else:
         logger.error(f"[{session_id}] Answers should be a dict, got {type(answers)}")
 
@@ -205,8 +205,8 @@ async def handle_choice(session_id: str, message: dict):
     # Store user responses in Redis
     choice = message["choice"]
     if isinstance(choice, str):
-        await redis_client.hset(f"responses:{session_id}", mapping={'choice': choice})
-        await redis_client.expire(f"responses:{session_id}", 3600)
+        await async_redis_client.hset(f"responses:{session_id}", mapping={'choice': choice})
+        await async_redis_client.expire(f"responses:{session_id}", 3600)
     else:
         logger.error(f"[{session_id}] Choice should be a string, got {type(choice)}")
 
@@ -217,7 +217,7 @@ async def handle_choice(session_id: str, message: dict):
 async def handle_reconnect(session_id: str, tab_id: str = None) -> bool:
     """Handle reconnect by sending last UI state"""
     logger.info(f"[{session_id}] Reconnecting to session")
-    last_state = await redis_client.get(f"last_ui_state:{session_id}")
+    last_state = await async_redis_client.get(f"last_ui_state:{session_id}")
     if last_state:
         message = json.loads(last_state)
         if tab_id:
@@ -239,7 +239,7 @@ async def send_message_to_frontend(session_id: str, message: dict):
     ui_message_types = {"questions", "choice", "plan_complete", "error", "info"}
     if message["type"] in ui_message_types:
         logger.debug(f"[{session_id}] Recording last UI message: {message['type']}")
-        await redis_client.set(f"last_ui_state:{session_id}", json.dumps(message), ex=86400)
+        await async_redis_client.set(f"last_ui_state:{session_id}", json.dumps(message), ex=86400)
         
     await queue_manager.publish_outbound(session_id, message)
 
